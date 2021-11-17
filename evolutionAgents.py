@@ -34,6 +34,7 @@ import random
 import math
 import itertools
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 #########################################################
@@ -65,6 +66,86 @@ def repeatedHeuristic(sequence):
     return len(sequence) - newNum
 
 
+def positionFitness(indiv, problem, fscale=0.1):
+    """fitness evaluation for position search problem"""
+    assert hasattr(problem, 'goal'),\
+        "position fitness evalution only available for PositionSearchProblem"
+
+    # count the cost to take
+    totCost = 0
+    for s in indiv:
+        totCost += s[2]
+        if problem.isGoalState(s[0]):
+            # encounter goal state and terminate
+            break
+
+    # wandering penalty
+    wanderingPenalty = repeatedHeuristic([s[0] for s in indiv])
+
+    fitness = math.exp(
+        -1 * fscale * (totCost + positionHeuristic(
+            s[0], problem))) / (wanderingPenalty + 1)
+    return fitness
+
+
+def pacmanFitness(indiv, problem, fscale=100):
+    """fitness evaluation for complete pacman problem"""
+    # get game state
+    gameState = problem.startingGameState
+    # scared ghost score
+    scaredFactor = 20
+
+    # min distance to ghost
+    minGhostDists = []
+
+    curState = gameState
+    for idx in range(len(indiv)):
+        # check each inner state
+        s = indiv[idx]
+
+        # generate successor game state and get useful information
+        curState = curState.generatePacmanSuccessor(s[1])
+        ghostStates = curState.getGhostStates()
+        scaredTimes = [ghostState.scaredTimer for ghostState in ghostStates]
+
+        # calculate the min distance to each ghost during the action sequence
+        dists = []
+        for i in range(len(scaredTimes)):
+            dist = util.manhattanDistance(s[0][0], ghostStates[i].getPosition())
+
+            if dist > scaredTimes[i] and dist <= len(indiv):
+                # unreachable scared (assume scared idle) and reachable normal ghost
+                dists.append(dist)
+        # record the minimum distance to harmful ghosts
+        if dists: minGhostDists.append(min(dists))
+
+        if problem.isGoalState(s[0]) or curState.isWin() or curState.isLose():
+            # encounter goal state and terminate
+            break
+
+    # evaluate the final state
+    position, foodGrid = s[0]
+    # game score
+    score = curState.getScore()
+    # the distance to reachable scared ghosts
+    scaredGhostDist = [
+        util.manhattanDistance(position, ghostStates[i].getPosition()) for i in range(len(scaredTimes))\
+            if scaredTimes[i] > 0 and\
+                scaredTimes[i] >= util.manhattanDistance(position, ghostStates[i].getPosition())]
+    foods = foodGrid.asList()
+    # the distance to foods (scale by score compared to scared ghosts)
+    foodDist = [scaredFactor * util.manhattanDistance(position, f) for f in foods]
+    # concatenate two eatable items
+    foodDist.extend(scaredGhostDist)
+
+    # the minimum distance to foods
+    minFoodDist = min(foodDist) if len(foodDist) != 0 else 1
+    # the minimum distance ever to cloest ghost
+    minGhostDist = min(minGhostDists) if len(minGhostDists) != 0 else fscale
+
+    return score + minGhostDist / minFoodDist
+
+
 def rouletteWheel(indivs, num, key=lambda x:x):
     """select individuals by roulette wheel
     :param indivs: the individuals to select
@@ -76,7 +157,7 @@ def rouletteWheel(indivs, num, key=lambda x:x):
     totVal = accVals[-1]
 
     selected = []
-    for _ in range(num):
+    for n in range(num):
         # take a random number from [0, totVal]
         r = random.uniform(0, totVal)
         for i in range(len(accVals)):
@@ -84,10 +165,16 @@ def rouletteWheel(indivs, num, key=lambda x:x):
                 selected.append(indivs[i])
                 break
 
+        if len(selected) != n+1:
+            # fixup
+            selected.append(indivs[-1])
+
     return selected
 
 
 class EvolutionSearchAgent():
+    bestFits = []
+
     def __init__(self, type='PositionSearchProblem', **kwargs):
         '''
         This is the EvolutionSearchAgent, you should firstly finish the search.evolutionSearch
@@ -117,17 +204,19 @@ class EvolutionSearchAgent():
         # dim of individuals
         self.actionDim = int(options['actionDim']) if 'actionDim' in options else 10
         # iterations for evolution
-        self.T = int(options['T']) if 'T' in options else 100
+        self.T = int(options['T']) if 'T' in options else 200
         # number of individuals in the population
-        self.popSize = int(options['popSize']) if 'popSize' in options else 50
+        self.popSize = int(options['popSize']) if 'popSize' in options else 100
         # size of mating pool (parents to select)
-        self.poolSize = int(options['poolSize']) if 'poolSize' in options else 50
+        self.poolSize = int(options['poolSize']) if 'poolSize' in options else 100
         # probability of crossover
         self.probCross = float(options['probCross']) if 'probCross' in options else 0.5
         # probability of mutation
         self.probMutation = float(options['probMutation']) if 'probMutation' in options else 0.05
         # the factor for fitness calculation
         self.fscale = float(options['fscale']) if 'fscale' in options else 0.1
+        # the log file (plot image) name
+        self.logfile = options['logfile'] if 'logfile' in options else 'fitness.png'
 
     def getFitness(self, individuals):
         '''
@@ -140,20 +229,10 @@ class EvolutionSearchAgent():
 
         extendedIndivs = [] # store the individuals extended with the fitness
         for indiv in individuals:
-            # count the cost to take
-            totCost = 0
-            for s in indiv:
-                totCost += s[2]
-                if self.problem.isGoalState(s[0]):
-                    # encounter goal state and terminate
-                    break
-
-            # wandering penalty
-            wanderingPenalty = repeatedHeuristic([s[0] for s in indiv])
-
-            fitness = math.exp(
-                -1 * self.fscale * (totCost + wanderingPenalty + positionHeuristic(
-                    s[0], self.problem)))
+            if isinstance(self.problem, PositionSearchProblem):
+                fitness = positionFitness(indiv, self.problem, self.fscale)
+            else:
+                fitness = pacmanFitness(indiv, self.problem, self.fscale)
             extendedIndivs.append((indiv, fitness))
 
         return extendedIndivs
@@ -220,7 +299,7 @@ class EvolutionSearchAgent():
             i += 2
 
         if i < len(indices):
-            indiv = self.matingPool[indices[i]]
+            indiv = self.matingPool[indices[i]][0]
 
             # mutate
             if random.random() < self.probCross:
@@ -283,6 +362,11 @@ class EvolutionSearchAgent():
 
     def crossover(self, parent1, parent2):
         """crossover between two parents (without fitness)"""
+        assert len(parent1) == len(parent2), "crossover require the same length genes"
+
+        if len(parent1) <= 1:
+            return parent1, parent2
+
         # one point crossover
         crossPoint = random.randint(1, len(parent1)-1)
         offs1 = parent1[:crossPoint] + parent2[crossPoint:]
@@ -317,6 +401,8 @@ class EvolutionSearchAgent():
 
         self.initPopulation()
         self.recordBest()
+
+        EvolutionSearchAgent.bestFits.append(self.best[1])
         print('Generation Number: {}'.format(self.generationNum))
         print('Best fitness: {}'.format(self.best[1]))
 
@@ -327,8 +413,15 @@ class EvolutionSearchAgent():
             self.survive()
             self.recordBest()
 
+            EvolutionSearchAgent.bestFits.append(self.best[1])
             print('Generation Number: {}'.format(self.generationNum))
             print('Best fitness: {}'.format(self.best[1]))
+
+        # plot fitness changes
+        plt.cla()
+        plt.plot(EvolutionSearchAgent.bestFits)
+        plt.savefig(self.logfile)
+        plt.close()
 
     def generateLegalActions(self):
         '''
