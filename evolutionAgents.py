@@ -22,11 +22,11 @@ A* search , run the following command:
 
 """
 
-from numpy.core.numeric import indices
 from game import Directions
 from game import Agent
 from game import Actions
 from searchAgents import SearchAgent, PositionSearchProblem, FoodSearchProblem
+from fitness import PacmanFitnessHelper, PositionFitnessHelper
 import util
 import time
 import search
@@ -42,117 +42,19 @@ import matplotlib.pyplot as plt
 #     after you fill in parts of EvolutionSearchAgent   #
 #########################################################
 
-def positionHeuristic(state, problem):
-    '''
-    A simple heuristic function for evaluate the fitness in task 1
-    :param state:
-    :return:
-    '''
-    return util.manhattanDistance(state, problem.goal)
-
-
-def repeatedHeuristic(sequence):
-    """
-    Heurstic about goodness of a sequence by counting repeated number
-    """
-    nodeSet = set()
-    newNum = 0
-
-    for n in sequence:
-        if n not in nodeSet:
-            nodeSet.add(n)
-            newNum += 1
-
-    return len(sequence) - newNum
-
-
-def positionFitness(indiv, problem, fscale=0.1):
-    """fitness evaluation for position search problem"""
-    assert hasattr(problem, 'goal'),\
-        "position fitness evalution only available for PositionSearchProblem"
-
-    # count the cost to take
-    totCost = 0
-    for s in indiv:
-        totCost += s[2]
-        if problem.isGoalState(s[0]):
-            # encounter goal state and terminate
-            break
-
-    # wandering penalty
-    wanderingPenalty = repeatedHeuristic([s[0] for s in indiv])
-
-    fitness = math.exp(
-        -1 * fscale * (totCost + positionHeuristic(
-            s[0], problem))) / (wanderingPenalty + 1)
-    return fitness
-
-
-def pacmanFitness(indiv, problem, fscale=100):
-    """fitness evaluation for complete pacman problem"""
-    # get game state
-    gameState = problem.startingGameState
-    # scared ghost score
-    scaredFactor = 20
-
-    # min distance to ghost
-    minGhostDists = []
-
-    curState = gameState
-    for idx in range(len(indiv)):
-        # check each inner state
-        s = indiv[idx]
-
-        # generate successor game state and get useful information
-        curState = curState.generatePacmanSuccessor(s[1])
-        ghostStates = curState.getGhostStates()
-        scaredTimes = [ghostState.scaredTimer for ghostState in ghostStates]
-
-        # calculate the min distance to each ghost during the action sequence
-        dists = []
-        for i in range(len(scaredTimes)):
-            dist = util.manhattanDistance(s[0][0], ghostStates[i].getPosition())
-
-            if dist > scaredTimes[i] and dist <= len(indiv):
-                # unreachable scared (assume scared idle) and reachable normal ghost
-                dists.append(dist)
-        # record the minimum distance to harmful ghosts
-        if dists: minGhostDists.append(min(dists))
-
-        if problem.isGoalState(s[0]) or curState.isWin() or curState.isLose():
-            # encounter goal state and terminate
-            break
-
-    # evaluate the final state
-    position, foodGrid = s[0]
-    # game score
-    score = curState.getScore()
-    # the distance to reachable scared ghosts
-    scaredGhostDist = [
-        util.manhattanDistance(position, ghostStates[i].getPosition()) for i in range(len(scaredTimes))\
-            if scaredTimes[i] > 0 and\
-                scaredTimes[i] >= util.manhattanDistance(position, ghostStates[i].getPosition())]
-    foods = foodGrid.asList()
-    # the distance to foods (scale by score compared to scared ghosts)
-    foodDist = [scaredFactor * util.manhattanDistance(position, f) for f in foods]
-    # concatenate two eatable items
-    foodDist.extend(scaredGhostDist)
-
-    # the minimum distance to foods
-    minFoodDist = min(foodDist) if len(foodDist) != 0 else 1
-    # the minimum distance ever to cloest ghost
-    minGhostDist = min(minGhostDists) if len(minGhostDists) != 0 else fscale
-
-    return score + minGhostDist / minFoodDist
-
-
 def rouletteWheel(indivs, num, key=lambda x:x):
     """select individuals by roulette wheel
     :param indivs: the individuals to select
     :param number: number of selected individuals
     :param key: the key attribute to use
     """
+    if len(indivs) == 0:
+        return []
+
     vals = [key(indiv) for indiv in indivs]
+    # relaxed lower bound
+    baseVal = min(vals) * 0.9
+    vals = [v - baseVal for v in vals]
     accVals = list(itertools.accumulate(vals))
     totVal = accVals[-1]
 
@@ -195,6 +97,7 @@ class EvolutionSearchAgent():
         self.numCallFitness = 0
         self.matingPool = None
         self.offsprings = None
+        self.fitnessHelper = None
         self.best = None
 
     def parseOptions(self, options):
@@ -215,8 +118,12 @@ class EvolutionSearchAgent():
         self.probMutation = float(options['probMutation']) if 'probMutation' in options else 0.05
         # the factor for fitness calculation
         self.fscale = float(options['fscale']) if 'fscale' in options else 0.1
+        # the weight for some penalty term when calculating fitness
+        self.penaltyWeight = float(options['penaltyWeight']) if 'penaltyWeight' in options else 0.0
+        # the weight for some future related term when calculating fitness
+        self.futureWeight = float(options['futureWeight']) if 'futureWeight' in options else 0.0
         # the log file (plot image) name
-        self.logfile = options['logfile'] if 'logfile' in options else 'fitness.png'
+        self.logfile = options['logfile'] if 'logfile' in options else 'imgs/fitness.png'
 
     def getFitness(self, individuals):
         '''
@@ -229,10 +136,10 @@ class EvolutionSearchAgent():
 
         extendedIndivs = [] # store the individuals extended with the fitness
         for indiv in individuals:
-            if isinstance(self.problem, PositionSearchProblem):
-                fitness = positionFitness(indiv, self.problem, self.fscale)
-            else:
-                fitness = pacmanFitness(indiv, self.problem, self.fscale)
+            fitness = self.fitnessHelper.calculate(
+                indiv, fscale=self.fscale,
+                penaltyWeight=self.penaltyWeight,
+                futureWeight=self.futureWeight)
             extendedIndivs.append((indiv, fitness))
 
         return extendedIndivs
@@ -260,6 +167,7 @@ class EvolutionSearchAgent():
         self.population = self.getFitness(self.population)
 
     def recordBest(self):
+        """record the best individual during the evolution"""
         curBest = self.population[
             np.argmax([indiv[1] for indiv in self.population])]
 
@@ -267,6 +175,7 @@ class EvolutionSearchAgent():
             self.best = curBest
 
     def selectParents(self):
+        """select parents into mating pool"""
         sortedPop = sorted(self.population, key=lambda x:x[1])
         self.matingPool = rouletteWheel(sortedPop, self.poolSize, lambda x:x[1])
 
@@ -283,15 +192,15 @@ class EvolutionSearchAgent():
             parent2 = self.matingPool[indices[i+1]]
 
             # crossover
-            if random.random() < self.probCross:
+            if util.flipCoin(self.probCross):
                 offspring1, offspring2 = self.crossover(parent1[0], parent2[0])
             else:
                 offspring1, offspring2 = parent1[0], parent2[0]
 
             # mutate
-            if random.random() < self.probMutation:
+            if util.flipCoin(self.probMutation):
                 offspring1 = self.mutate(offspring1)
-            if random.random() < self.probMutation:
+            if util.flipCoin(self.probMutation):
                 offspring2 = self.mutate(offspring2)
 
             self.offsprings += [offspring1, offspring2]
@@ -302,7 +211,7 @@ class EvolutionSearchAgent():
             indiv = self.matingPool[indices[i]][0]
 
             # mutate
-            if random.random() < self.probCross:
+            if util.flipCoin(self.probCross):
                 indiv = self.mutate(indiv)
 
             self.offsprings.append(indiv)
@@ -327,11 +236,12 @@ class EvolutionSearchAgent():
             self.population = sortedOffs[:self.popSize]
 
     def ensureValid(self, indiv, start=0, end=None):
-        """ensuer the individual (maybe partial) is valid (the action is valid)"""
+        """ensure the individual (maybe partial) is valid (the action is valid)"""
         end = end or len(indiv)
-        for i in range(start+1, end):
+        for i in range(start, end):
             # get legal actions
-            successors = self.problem.getSuccessors(indiv[i-1][0])
+            successors = self.problem.getSuccessors(indiv[i-1][0]) if i > 0 \
+                else self.problem.getSuccessors(self.problem.getStartState())
             for s in successors:
                 # if the same action found, replace the entire node
                 if indiv[i][1] == s[1]:
@@ -356,7 +266,7 @@ class EvolutionSearchAgent():
         node = random.choice(successors)
 
         indiv[idx] = node
-        self.ensureValid(indiv)
+        self.ensureValid(indiv, start=idx)
 
         return indiv
 
@@ -372,35 +282,40 @@ class EvolutionSearchAgent():
         offs1 = parent1[:crossPoint] + parent2[crossPoint:]
         offs2 = parent2[:crossPoint] + parent1[crossPoint:]
 
-        self.ensureValid(offs1)
-        self.ensureValid(offs2)
+        self.ensureValid(offs1, start=crossPoint)
+        self.ensureValid(offs2, start=crossPoint)
 
         return offs1, offs2
 
     def stopCriterion(self):
+        """evolution stop criterion"""
         if self.generationNum >= self.T:
             return True
 
-        # check whether exist the optimal solution now
-        if isinstance(self.problem, PositionSearchProblem):
-            bestFitness = math.exp(
-                -1 * self.fscale * positionHeuristic(
-                    self.problem.getStartState(), self.problem))
-            if self.best[1] >= bestFitness:
-                return True
+        # can add other criterion here
 
         return False
 
-    def evolve(self, problem):
-        """evolve solution for the problem"""
+    def initEvolution(self, problem):
+        """initialize components for a new evolution"""
         self.problem = problem
         self.population = None
         self.matingPool = None
         self.offsprings = None
         self.best = None
 
+        if isinstance(problem, PositionSearchProblem):
+            self.fitnessHelper = PositionFitnessHelper(problem)
+        else:
+            self.fitnessHelper = PacmanFitnessHelper(problem, self.actionDim)
+
+    def evolve(self, problem):
+        """evolve solution for the problem"""
+        self.initEvolution(problem)
         self.initPopulation()
         self.recordBest()
+
+        print("========== Evolution begins ==========")
 
         EvolutionSearchAgent.bestFits.append(self.best[1])
         print('Generation Number: {}'.format(self.generationNum))
@@ -416,6 +331,9 @@ class EvolutionSearchAgent():
             EvolutionSearchAgent.bestFits.append(self.best[1])
             print('Generation Number: {}'.format(self.generationNum))
             print('Best fitness: {}'.format(self.best[1]))
+
+        print("getFitness called times: {}".format(self.numCallFitness))
+        print("========== Evolution ends ==========")
 
         # plot fitness changes
         plt.cla()
