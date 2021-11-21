@@ -145,3 +145,6 @@ imgs/
 
 # records
 recorded-game-*
+
+# logs
+logs/
