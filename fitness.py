@@ -153,6 +153,7 @@ class PacmanFitnessHelper(FitnessHelper):
         initScore = gameState.getScore()
         dangerZones = self.dangerZones.copy()
         foodScore = 20
+        scaredGhostScore = 200
         winScore = 500
         penaltyWeight = 1 if 'penaltyWeight' not in kwargs else kwargs['penaltyWeight']
         futureWeight = 1 if 'futureWeight' not in kwargs else kwargs['futureWeight']
@@ -198,7 +199,8 @@ class PacmanFitnessHelper(FitnessHelper):
 
         # normalize
         minFoodDist /= walls.width * walls.height
-        scoreChange /= (initFoodGrid.count() * foodScore + winScore)
+        totScaredScore = scaredGhostScore * len(ghostStates)
+        scoreChange /= (initFoodGrid.count() * foodScore + winScore + totScaredScore)
 
         fitness = math.exp(
             fscale *(scoreChange - penaltyWeight * dangerPenalty - futureWeight * minFoodDist))
