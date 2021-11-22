@@ -193,7 +193,7 @@ class PacmanFitnessHelper(FitnessHelper):
         scoreChange = score - initScore
         # the distance to closet food
         minFoodDist = closestFood(position, foodGrid, walls)
-        minFoodDist = minFoodDist if minFoodDist is not None else (walls.width * walls.height)
+        minFoodDist = minFoodDist if minFoodDist is not None else 0
         # danger penalty sum
         dangerPenalty = sum([1/(d+1) for d in dangerTimes])
 
