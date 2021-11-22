@@ -91,7 +91,7 @@ class PositionFitnessHelper(FitnessHelper):
 
         if 'penaltyWeight' in kwargs:
             # wandering penalty
-            wanderPenalty = kwargs['penaltyWeight'] + repeatedHeuristic(states)
+            wanderPenalty = kwargs['penaltyWeight'] * repeatedHeuristic(states)
             fitness = math.exp(-1 * kwargs['fscale'] * (totCost + dist + wanderPenalty))
         else:
             fitness = math.exp(-1 * kwargs['fscale'] * (totCost + dist))
