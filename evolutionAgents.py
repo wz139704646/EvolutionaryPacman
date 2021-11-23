@@ -35,6 +35,7 @@ import math
 import itertools
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 
 #########################################################
@@ -44,7 +45,7 @@ import matplotlib.pyplot as plt
 
 def rouletteWheel(indivs, num, key=lambda x:x):
     """select individuals by roulette wheel
-    :param indivs: the individuals to select
+    :param indivs: the individuals to select (sorted)
     :param number: number of selected individuals
     :param key: the key attribute to use
     """
@@ -74,8 +75,26 @@ def rouletteWheel(indivs, num, key=lambda x:x):
     return selected
 
 
+def tournament(indivs, num, compSize, replace=False, key=lambda x:x):
+    """tournament selection
+    :param indivs: the individuals to select
+    :param num: the number of individuals to be selected
+    :param compSize: the number of individuals to compare
+        (join tournament) each time
+    :param replace: sample with replacement or not
+    :param key: the key attribute used to compare (the bigger the better)
+    """
+    selected = []
+    for _ in range(num):
+        candidates = np.random.choice(indivs, size=compSize, replace=replace)
+        selected.append(candidates[np.argmax([key(c) for c in candidates])])
+
+    return selected
+
+
 class EvolutionSearchAgent():
     bestFits = []
+    callFitnessTimes = []
 
     def __init__(self, type='PositionSearchProblem', **kwargs):
         '''
@@ -123,7 +142,7 @@ class EvolutionSearchAgent():
         # the weight for some future related term when calculating fitness
         self.futureWeight = float(options['futureWeight']) if 'futureWeight' in options else 0.0
         # the log file (plot image) name
-        self.logfile = options['logfile'] if 'logfile' in options else 'imgs/fitness.png'
+        self.logfile = options['logfile'] if 'logfile' in options else 'imgs/evolution.png'
 
     def getFitness(self, individuals):
         '''
@@ -318,6 +337,7 @@ class EvolutionSearchAgent():
         print("========== Evolution begins ==========")
 
         EvolutionSearchAgent.bestFits.append(self.best[1])
+        EvolutionSearchAgent.callFitnessTimes.append(self.numCallFitness)
         print('Generation Number: {}'.format(self.generationNum))
         print('Best fitness: {}'.format(self.best[1]))
 
@@ -329,17 +349,31 @@ class EvolutionSearchAgent():
             self.recordBest()
 
             EvolutionSearchAgent.bestFits.append(self.best[1])
+            EvolutionSearchAgent.callFitnessTimes.append(self.numCallFitness)
             print('Generation Number: {}'.format(self.generationNum))
             print('Best fitness: {}'.format(self.best[1]))
 
         print("getFitness called times: {}".format(self.numCallFitness))
         print("========== Evolution ends ==========")
 
-        # plot fitness changes
+        # plot logs
+        self.plot()
+
+    def plot(self):
+        """plot some log data"""
         plt.cla()
-        plt.plot(EvolutionSearchAgent.bestFits)
-        plt.savefig(self.logfile)
-        plt.close()
+        plt.figure()
+        fig, ax = plt.subplots()
+        ax.plot(EvolutionSearchAgent.bestFits, color='green', label='fitness')
+        ax.set_xlabel('number of evolutions')
+        ax.set_ylabel('best fitness')
+        ax1 = ax.twinx()
+        ax1.plot(EvolutionSearchAgent.callFitnessTimes, linestyle='--', color='blue', label='call times')
+        fitnessPatch = mpatches.Patch(lw=1, linestyle='-', color='green', label='fitness')
+        timesPatch = mpatches.Patch(lw=1, linestyle='--', color='blue', label='call times')
+        ax.legend(handles=[fitnessPatch, timesPatch])
+        fig.savefig(self.logfile)
+        plt.close(fig)
 
     def generateLegalActions(self):
         '''
@@ -399,3 +433,61 @@ class EvolutionSearchAgent():
                 action = Directions.STOP
 
             return action
+
+
+class EnhancedEvolutionSearchAgent(EvolutionSearchAgent):
+    """the enhanced version of evolution search agent.
+    Enhanced components:
+    - survival selection: keep the elites or mating pool to the next population
+    - parent selection: add tournament and rank methods
+    """
+
+    def parseOptions(self, options):
+        super().parseOptions(options)
+
+        # the number of elites in previous generation to keep
+        self.elitesNum = int(options['elitesNum']) if 'elitesNum' in options else 0
+        # whether to keep the mating pool to the next generation
+        self.keepMatingPool = bool(options['keepMatingPool']) if 'keepMatingPool' in options else False
+        # the type of selection
+        self.selectionType = options['selectionType'] if 'selectionType' in options else 'roulette'
+        # the size of tournament
+        self.tournamentSize = int(options['tournamentSize']) if 'tournamentSize' in options else 20
+        # sample with replacement or not when selecting parents
+        self.selectReplace = bool(options['selectReplace']) if 'selectReplace' in options else True
+
+    def selectParents(self):
+        """select parents into mating pool"""
+        if self.selectionType == 'roulette':
+            # roulette wheel
+            sortedPop = sorted(self.population, key=lambda x:x[1])
+            self.matingPool = rouletteWheel(sortedPop, self.poolSize, lambda x:x[1])
+        elif self.selectionType == 'tournament':
+            # tournament selection
+            self.matingPool = tournament(
+                self.population, self.poolSize, self.tournamentSize,
+                replace=self.selectReplace, key=lambda x:x[1])
+        else:
+            # rank
+            sortedPop = sorted(self.population, key=lambda x:x[1], reverse=True)
+            self.matingPool = sortedPop[:self.poolSize]
+
+    def survive(self):
+        # find the elites
+        if self.elitesNum > 0:
+            elites = sorted(self.population, key=lambda x:x[1], reverse=True)[:self.elitesNum]
+        else:
+            elites = []
+
+        if self.keepMatingPool and self.popSize > self.poolSize:
+            # keep the individuals in the mating pool to the next generation
+            self.generationNum += 1
+            sortedOffs = sorted(self.offsprings, key=lambda x:x[1], reverse=True)
+            # keep both elites and mating pool
+            self.population = elites + self.matingPool + sortedOffs
+            self.population = self.population[:self.popSize]
+        else:
+            # keep the elites
+            super().survive()
+            self.population = elites + self.population[:self.popSize-self.elitesNum]
+
