@@ -110,6 +110,7 @@ class EvolutionSearchAgent():
         # set seed
         if self.seed is not None:
             random.seed(self.seed)
+            np.random.seed(self.seed)
 
         self.problem = None
         self.population = None
