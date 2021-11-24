@@ -86,8 +86,8 @@ def tournament(indivs, num, compSize, replace=False, key=lambda x:x):
     """
     selected = []
     for _ in range(num):
-        candidates = np.random.choice(indivs, size=compSize, replace=replace)
-        selected.append(candidates[np.argmax([key(c) for c in candidates])])
+        candidates = np.random.choice(range(len(indivs)), size=compSize, replace=replace)
+        selected.append(indivs[candidates[np.argmax([key(indivs[c]) for c in candidates])]])
 
     return selected
 
